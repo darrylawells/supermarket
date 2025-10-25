@@ -12,22 +12,27 @@
           v-model="searchQuery"
           type="text"
           placeholder="Search for products..."
+          @input="handleSearch"
         />
       </div>
       <div class="form-group">
         <label>Filter by Category</label>
-        <select v-model="selectedCategory">
+        <select v-model="selectedCategory" @change="handleSearch">
           <option value="">All Categories</option>
-          <option v-for="cat in categories" :key="cat" :value="cat">
+          <option v-for="cat in priceStore.categories" :key="cat" :value="cat">
             {{ cat }}
           </option>
         </select>
       </div>
     </div>
 
-    <div class="products-grid">
+    <div v-if="priceStore.loading" class="loading">
+      Loading products...
+    </div>
+
+    <div v-else-if="productsWithPrices.length > 0" class="products-grid">
       <div
-        v-for="product in filteredProducts"
+        v-for="product in productsWithPrices"
         :key="product.id"
         class="product-card card"
       >
@@ -36,7 +41,7 @@
           <span class="category-badge">{{ product.category }}</span>
         </div>
 
-        <div class="price-comparison">
+        <div v-if="product.prices && product.prices.length > 0" class="price-comparison">
           <div
             v-for="(priceEntry, index) in product.prices"
             :key="index"
@@ -44,19 +49,19 @@
             :class="{ 'cheapest': index === 0 }"
           >
             <div class="supermarket-info">
-              <span class="supermarket-logo">{{ priceEntry.supermarket.logo }}</span>
+              <span class="supermarket-logo">{{ priceEntry.logo }}</span>
               <div>
-                <div class="supermarket-name">{{ priceEntry.supermarket.name }}</div>
-                <div class="store-location">{{ priceEntry.storeLocation }}</div>
+                <div class="supermarket-name">{{ priceEntry.supermarket_name }}</div>
+                <div class="store-location">{{ priceEntry.store_location }}</div>
               </div>
             </div>
             <div class="price-info">
-              <div class="price">£{{ priceEntry.price.toFixed(2) }}</div>
+              <div class="price">£{{ parseFloat(priceEntry.price).toFixed(2) }}</div>
               <div class="verifications">
-                ✓ {{ priceEntry.verifications }} verifications
+                ✓ {{ priceEntry.verification_count }} verifications
               </div>
               <div class="last-updated">
-                Updated: {{ formatDate(priceEntry.lastUpdated) }}
+                Updated: {{ formatDate(priceEntry.updated_at) }}
               </div>
             </div>
             <div v-if="index === 0" class="best-price-badge">
@@ -65,60 +70,94 @@
           </div>
         </div>
 
-        <div v-if="product.prices.length === 0" class="no-prices">
+        <div v-else class="no-prices">
           No prices available yet. Be the first to add one!
         </div>
+
+        <div class="product-actions">
+          <button @click="togglePriceHistory(product.id)" class="secondary-btn">
+            {{ showHistory[product.id] ? 'Hide' : 'Show' }} Price History
+          </button>
+        </div>
+
+        <PriceHistoryChart
+          v-if="showHistory[product.id]"
+          :product-id="product.id"
+          :product-name="product.name"
+        />
       </div>
     </div>
 
-    <div v-if="filteredProducts.length === 0" class="no-results">
+    <div v-else class="no-results">
       <p>No products found. Try adjusting your search or filters.</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { usePriceStore } from '../stores/priceStore'
+import { ref, reactive, onMounted } from 'vue';
+import { usePriceStore } from '../stores/priceStore';
+import PriceHistoryChart from '../components/PriceHistoryChart.vue';
 
-const priceStore = usePriceStore()
-const searchQuery = ref('')
-const selectedCategory = ref('')
+const priceStore = usePriceStore();
+const searchQuery = ref('');
+const selectedCategory = ref('');
+const productsWithPrices = ref([]);
+const showHistory = reactive({});
 
-const categories = computed(() => {
-  const cats = new Set(priceStore.products.map(p => p.category))
-  return Array.from(cats)
-})
+const togglePriceHistory = (productId) => {
+  showHistory[productId] = !showHistory[productId];
+};
 
-const filteredProducts = computed(() => {
-  let filtered = priceStore.products
+const handleSearch = async () => {
+  const filters = {};
 
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    filtered = filtered.filter(p =>
-      p.name.toLowerCase().includes(query) ||
-      p.category.toLowerCase().includes(query)
-    )
+    filters.search = searchQuery.value;
   }
 
   if (selectedCategory.value) {
-    filtered = filtered.filter(p => p.category === selectedCategory.value)
+    filters.category = selectedCategory.value;
   }
 
-  return filtered.map(product => priceStore.getProductWithPrices(product.id))
-})
+  await priceStore.fetchProducts(filters);
+  await loadProductPrices();
+};
+
+const loadProductPrices = async () => {
+  const products = [];
+
+  for (const product of priceStore.products) {
+    const productWithPrices = await priceStore.getProductWithPrices(product.id);
+    if (productWithPrices) {
+      products.push(productWithPrices);
+    }
+  }
+
+  productsWithPrices.value = products;
+};
 
 const formatDate = (dateString) => {
-  const date = new Date(dateString)
-  const today = new Date()
-  const diffTime = Math.abs(today - date)
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  const date = new Date(dateString);
+  const today = new Date();
+  const diffTime = Math.abs(today - date);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
-  if (diffDays < 7) return `${diffDays} days ago`
-  return date.toLocaleDateString('en-GB')
-}
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString('en-GB');
+};
+
+onMounted(async () => {
+  await Promise.all([
+    priceStore.fetchProducts(),
+    priceStore.fetchCategories(),
+    priceStore.fetchSupermarkets()
+  ]);
+
+  await loadProductPrices();
+});
 </script>
 
 <style scoped>
@@ -143,6 +182,13 @@ const formatDate = (dateString) => {
   grid-template-columns: 2fr 1fr;
   gap: 1rem;
   margin-bottom: 2rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #666;
+  font-size: 1.2rem;
 }
 
 .products-grid {
@@ -185,6 +231,7 @@ const formatDate = (dateString) => {
 .price-comparison {
   display: grid;
   gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .price-entry {
@@ -270,6 +317,24 @@ const formatDate = (dateString) => {
   padding: 2rem;
   color: #999;
   font-style: italic;
+}
+
+.product-actions {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #f0f0f0;
+}
+
+.secondary-btn {
+  background: white;
+  color: #667eea;
+  border: 2px solid #667eea;
+  width: 100%;
+}
+
+.secondary-btn:hover {
+  background: #667eea;
+  color: white;
 }
 
 .no-results {

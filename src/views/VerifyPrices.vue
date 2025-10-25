@@ -5,97 +5,93 @@
       <p>Help maintain accuracy by verifying submitted prices</p>
     </div>
 
-    <div v-if="priceStore.pendingVerifications.length === 0" class="no-verifications card">
+    <div v-if="priceStore.loading" class="loading">
+      Loading pending verifications...
+    </div>
+
+    <div v-else-if="priceStore.pendingPrices.length === 0" class="no-verifications card">
       <h3>No Pending Verifications</h3>
       <p>All submitted prices have been verified. Check back later!</p>
     </div>
 
     <div v-else class="verifications-grid">
       <div
-        v-for="verification in priceStore.pendingVerifications"
+        v-for="verification in priceStore.pendingPrices"
         :key="verification.id"
         class="verification-card card"
       >
         <div class="verification-header">
-          <h3>{{ getProductName(verification.productId) }}</h3>
-          <span :class="['status-badge', verification.status]">
-            {{ verification.status }}
-          </span>
+          <h3>{{ verification.product_name }}</h3>
+          <span class="category-badge">{{ verification.category }}</span>
         </div>
 
         <div class="verification-details">
           <div class="detail-row">
             <span class="label">Supermarket:</span>
             <span class="value">
-              {{ getSupermarketInfo(verification.supermarketId).logo }}
-              {{ getSupermarketInfo(verification.supermarketId).name }}
+              {{ verification.logo }}
+              {{ verification.supermarket_name }}
             </span>
           </div>
 
           <div class="detail-row">
             <span class="label">Price:</span>
-            <span class="value price-value">£{{ verification.price.toFixed(2) }}</span>
+            <span class="value price-value">£{{ parseFloat(verification.price).toFixed(2) }}</span>
           </div>
 
           <div class="detail-row">
             <span class="label">Store Location:</span>
-            <span class="value">{{ verification.storeLocation }}</span>
+            <span class="value">{{ verification.store_location }}</span>
           </div>
 
           <div class="detail-row">
             <span class="label">Submitted By:</span>
-            <span class="value">{{ verification.submittedBy }}</span>
+            <span class="value">{{ verification.submitted_by_username || 'Anonymous' }}</span>
           </div>
 
           <div class="detail-row">
             <span class="label">Date:</span>
-            <span class="value">{{ formatDate(verification.submittedDate) }}</span>
+            <span class="value">{{ formatDate(verification.created_at) }}</span>
           </div>
         </div>
 
-        <div v-if="verification.photo" class="verification-photo">
-          <img :src="verification.photo" alt="Price verification photo" />
+        <div v-if="verification.photo_url" class="verification-photo">
+          <img :src="getImageUrl(verification.photo_url)" alt="Price verification photo" />
         </div>
         <div v-else class="no-photo">
           No photo provided
         </div>
 
         <div class="price-comparison-info">
-          <h4>Current Prices for this Product:</h4>
-          <div class="current-prices">
+          <h4>Current Verified Prices for this Product:</h4>
+          <div v-if="verifiedPrices[verification.product_id]" class="current-prices">
             <div
-              v-for="(price, index) in getCurrentPrices(verification.productId)"
+              v-for="(price, index) in verifiedPrices[verification.product_id]"
               :key="index"
               class="current-price-item"
             >
-              <span>{{ price.supermarket.logo }} {{ price.supermarket.name }}</span>
-              <span class="current-price">£{{ price.price.toFixed(2) }}</span>
+              <span>{{ price.logo }} {{ price.supermarket_name }}</span>
+              <span class="current-price">£{{ parseFloat(price.price).toFixed(2) }}</span>
             </div>
           </div>
+          <div v-else class="loading-prices">Loading...</div>
         </div>
 
-        <div v-if="verification.status === 'pending'" class="verification-actions">
+        <div class="verification-actions">
           <button
             @click="handleVerify(verification.id, true)"
             class="approve-btn"
+            :disabled="verifying[verification.id]"
           >
-            ✓ Approve Price
+            {{ verifying[verification.id] === 'approve' ? 'Approving...' : '✓ Approve Price' }}
           </button>
           <button
             @click="handleVerify(verification.id, false)"
             class="reject-btn"
+            :disabled="verifying[verification.id]"
           >
-            ✗ Reject Price
+            {{ verifying[verification.id] === 'reject' ? 'Rejecting...' : '✗ Reject Price' }}
           </button>
-        </div>
-
-        <div v-else class="verification-result">
-          <span v-if="verification.status === 'approved'" class="approved">
-            ✓ Price Approved
-          </span>
-          <span v-else class="rejected">
-            ✗ Price Rejected
-          </span>
         </div>
       </div>
     </div>
@@ -114,37 +110,57 @@
 </template>
 
 <script setup>
-import { usePriceStore } from '../stores/priceStore'
+import { ref, reactive, onMounted } from 'vue';
+import { usePriceStore } from '../stores/priceStore';
 
-const priceStore = usePriceStore()
+const priceStore = usePriceStore();
+const verifying = reactive({});
+const verifiedPrices = reactive({});
 
-const getProductName = (productId) => {
-  const product = priceStore.products.find(p => p.id === productId)
-  return product ? product.name : 'Unknown Product'
-}
+const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
 
-const getSupermarketInfo = (supermarketId) => {
-  const supermarket = priceStore.supermarkets.find(s => s.id === supermarketId)
-  return supermarket || { name: 'Unknown', logo: '?' }
-}
-
-const getCurrentPrices = (productId) => {
-  const product = priceStore.getProductWithPrices(productId)
-  return product ? product.prices.slice(0, 3) : []
-}
+const getImageUrl = (photoUrl) => {
+  if (!photoUrl) return '';
+  return photoUrl.startsWith('http') ? photoUrl : `${API_BASE}${photoUrl}`;
+};
 
 const formatDate = (dateString) => {
-  const date = new Date(dateString)
+  const date = new Date(dateString);
   return date.toLocaleDateString('en-GB', {
     day: 'numeric',
     month: 'short',
-    year: 'numeric'
-  })
-}
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
 
-const handleVerify = (verificationId, approved) => {
-  priceStore.verifyPrice(verificationId, approved)
-}
+const handleVerify = async (verificationId, approved) => {
+  verifying[verificationId] = approved ? 'approve' : 'reject';
+
+  try {
+    await priceStore.verifyPrice(verificationId, approved);
+  } catch (err) {
+    console.error('Failed to verify price:', err);
+    alert('Failed to verify price. Please try again.');
+  } finally {
+    delete verifying[verificationId];
+  }
+};
+
+const loadVerifiedPrices = async () => {
+  for (const pending of priceStore.pendingPrices) {
+    const product = await priceStore.getProductWithPrices(pending.product_id);
+    if (product && product.prices) {
+      verifiedPrices[pending.product_id] = product.prices.slice(0, 3);
+    }
+  }
+};
+
+onMounted(async () => {
+  await priceStore.fetchPendingPrices();
+  await loadVerifiedPrices();
+});
 </script>
 
 <style scoped>
@@ -161,6 +177,13 @@ const handleVerify = (verificationId, approved) => {
 
 .page-header p {
   color: #666;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #666;
+  font-size: 1.2rem;
 }
 
 .no-verifications {
@@ -205,27 +228,13 @@ const handleVerify = (verificationId, approved) => {
   color: #333;
 }
 
-.status-badge {
+.category-badge {
+  background: #667eea;
+  color: white;
   padding: 0.5rem 1rem;
   border-radius: 20px;
   font-size: 0.85rem;
   font-weight: 600;
-  text-transform: uppercase;
-}
-
-.status-badge.pending {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.status-badge.approved {
-  background: #d4edda;
-  color: #155724;
-}
-
-.status-badge.rejected {
-  background: #f8d7da;
-  color: #721c24;
 }
 
 .verification-details {
@@ -309,6 +318,12 @@ const handleVerify = (verificationId, approved) => {
   color: #667eea;
 }
 
+.loading-prices {
+  text-align: center;
+  color: #999;
+  padding: 1rem;
+}
+
 .verification-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -320,7 +335,7 @@ const handleVerify = (verificationId, approved) => {
   background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
 }
 
-.approve-btn:hover {
+.approve-btn:hover:not(:disabled) {
   box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
 }
 
@@ -328,32 +343,8 @@ const handleVerify = (verificationId, approved) => {
   background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
 }
 
-.reject-btn:hover {
+.reject-btn:hover:not(:disabled) {
   box-shadow: 0 4px 12px rgba(231, 76, 60, 0.4);
-}
-
-.verification-result {
-  margin-top: 1.5rem;
-  text-align: center;
-  padding: 1rem;
-  border-radius: 8px;
-  font-weight: 600;
-}
-
-.verification-result .approved {
-  color: #155724;
-  background: #d4edda;
-  padding: 0.75rem 1.5rem;
-  border-radius: 5px;
-  display: inline-block;
-}
-
-.verification-result .rejected {
-  color: #721c24;
-  background: #f8d7da;
-  padding: 0.75rem 1.5rem;
-  border-radius: 5px;
-  display: inline-block;
 }
 
 .info-card {

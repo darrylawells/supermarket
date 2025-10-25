@@ -9,7 +9,7 @@
       <form @submit.prevent="handleSubmit">
         <div class="form-group">
           <label>Select Product</label>
-          <select v-model="formData.productId" required>
+          <select v-model="formData.productId">
             <option value="">Choose a product...</option>
             <option v-for="product in priceStore.products" :key="product.id" :value="product.id">
               {{ product.name }} ({{ product.category }})
@@ -32,7 +32,11 @@
               v-model="newProduct.category"
               type="text"
               placeholder="e.g., Fruit & Veg"
+              list="categories"
             />
+            <datalist id="categories">
+              <option v-for="cat in priceStore.categories" :key="cat" :value="cat" />
+            </datalist>
           </div>
         </div>
 
@@ -131,10 +135,11 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
-import { usePriceStore } from '../stores/priceStore'
+import { ref, reactive, onMounted } from 'vue';
+import { usePriceStore } from '../stores/priceStore';
+import api from '../services/api';
 
-const priceStore = usePriceStore()
+const priceStore = usePriceStore();
 
 const formData = reactive({
   productId: '',
@@ -142,106 +147,129 @@ const formData = reactive({
   price: null,
   storeLocation: '',
   photo: null
-})
+});
 
 const newProduct = reactive({
   name: '',
   category: ''
-})
+});
 
-const photoPreview = ref(null)
-const errorMessage = ref('')
-const successMessage = ref('')
-const isSubmitting = ref(false)
-const fileInput = ref(null)
+const photoPreview = ref(null);
+const errorMessage = ref('');
+const successMessage = ref('');
+const isSubmitting = ref(false);
+const fileInput = ref(null);
 
 const handleFileUpload = (event) => {
-  const file = event.target.files[0]
+  const file = event.target.files[0];
   if (file) {
     if (file.size > 5 * 1024 * 1024) {
-      errorMessage.value = 'File size must be less than 5MB'
-      return
+      errorMessage.value = 'File size must be less than 5MB';
+      return;
     }
 
-    formData.photo = file
+    formData.photo = file;
 
-    const reader = new FileReader()
+    const reader = new FileReader();
     reader.onload = (e) => {
-      photoPreview.value = e.target.result
-    }
-    reader.readAsDataURL(file)
-    errorMessage.value = ''
+      photoPreview.value = e.target.result;
+    };
+    reader.readAsDataURL(file);
+    errorMessage.value = '';
   }
-}
+};
 
 const removePhoto = () => {
-  formData.photo = null
-  photoPreview.value = null
+  formData.photo = null;
+  photoPreview.value = null;
   if (fileInput.value) {
-    fileInput.value.value = ''
+    fileInput.value.value = '';
   }
-}
+};
 
-const handleSubmit = () => {
-  errorMessage.value = ''
-  successMessage.value = ''
+const handleSubmit = async () => {
+  errorMessage.value = '';
+  successMessage.value = '';
 
-  let productId = formData.productId
+  let productId = formData.productId;
 
   // Check if creating a new product
   if (newProduct.name && newProduct.category) {
-    productId = priceStore.addProduct({
-      name: newProduct.name,
-      category: newProduct.category
-    })
+    try {
+      productId = await priceStore.addProduct({
+        name: newProduct.name,
+        category: newProduct.category
+      });
+    } catch (err) {
+      errorMessage.value = 'Failed to create product: ' + err.response?.data?.error;
+      return;
+    }
   }
 
   if (!productId) {
-    errorMessage.value = 'Please select a product or add a new one'
-    return
+    errorMessage.value = 'Please select a product or add a new one';
+    return;
   }
 
   if (!formData.supermarketId || !formData.price || !formData.storeLocation) {
-    errorMessage.value = 'Please fill in all required fields'
-    return
+    errorMessage.value = 'Please fill in all required fields';
+    return;
   }
 
-  isSubmitting.value = true
+  isSubmitting.value = true;
 
-  // Simulate API call
-  setTimeout(() => {
-    priceStore.addProductPrice({
+  try {
+    let photoUrl = null;
+
+    // Upload photo if provided
+    if (formData.photo) {
+      const uploadResponse = await api.uploadPhoto(formData.photo);
+      photoUrl = uploadResponse.data.url;
+    }
+
+    // Create price entry
+    await priceStore.addProductPrice({
       productId: productId,
       supermarketId: formData.supermarketId,
       price: formData.price,
       storeLocation: formData.storeLocation,
-      photos: formData.photo ? [formData.photo.name] : []
-    })
+      photoUrl: photoUrl
+    });
 
-    successMessage.value = 'Price submitted successfully! Thank you for contributing.'
+    successMessage.value = 'Price submitted successfully! Thank you for contributing.';
 
     // Reset form
-    formData.productId = ''
-    formData.supermarketId = ''
-    formData.price = null
-    formData.storeLocation = ''
-    formData.photo = null
-    newProduct.name = ''
-    newProduct.category = ''
-    photoPreview.value = null
+    formData.productId = '';
+    formData.supermarketId = '';
+    formData.price = null;
+    formData.storeLocation = '';
+    formData.photo = null;
+    newProduct.name = '';
+    newProduct.category = '';
+    photoPreview.value = null;
 
     if (fileInput.value) {
-      fileInput.value.value = ''
+      fileInput.value.value = '';
     }
-
-    isSubmitting.value = false
 
     // Clear success message after 5 seconds
     setTimeout(() => {
-      successMessage.value = ''
-    }, 5000)
-  }, 1000)
-}
+      successMessage.value = '';
+    }, 5000);
+  } catch (err) {
+    errorMessage.value = 'Failed to submit price: ' + (err.response?.data?.error || err.message);
+  } finally {
+    isSubmitting.value = false;
+  }
+};
+
+onMounted(async () => {
+  await Promise.all([
+    priceStore.fetchProducts(),
+    priceStore.fetchCategories(),
+    priceStore.fetchSupermarkets()
+  ]);
+});
 </script>
 
 <style scoped>

@@ -25,3 +25,8 @@ dist-ssr
 
 # Uploaded files
 public/uploads
+server/uploads
+
+# Environment variables
+.env
+server/.env
